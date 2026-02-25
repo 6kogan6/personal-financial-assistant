@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ledgerlite-postgres
+    environment:
+      POSTGRES_DB: ledgerlite
+      POSTGRES_USER: ledgerlite
+      POSTGRES_PASSWORD: ledgerlite
+    ports:
+      - "5432:5432"
+    volumes:
+      - ledgerlite_pgdata:/var/lib/postgresql/data
+
+volumes:
+  ledgerlite_pgdata:
