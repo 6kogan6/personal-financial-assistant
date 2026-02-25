@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"personal-financial-assistant/backend/internal/auth"
+	"personal-financial-assistant/backend/internal/categories"
 	"personal-financial-assistant/backend/internal/db"
 	"personal-financial-assistant/backend/internal/httpapi"
 	"personal-financial-assistant/backend/internal/users"
@@ -33,10 +34,12 @@ func main() {
 	}
 
 	usersRepo := users.NewRepo(dbConn.Pool)
+	categoriesRepo := categories.NewRepo(dbConn.Pool)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
-		UsersRepo: usersRepo,
-		JWT:       jwtMgr,
+		UsersRepo:      usersRepo,
+		CategoriesRepo: categoriesRepo,
+		JWT:            jwtMgr,
 	})
 
 	srv := &http.Server{
