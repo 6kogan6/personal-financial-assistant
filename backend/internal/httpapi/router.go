@@ -5,6 +5,7 @@ import (
 
 	"personal-financial-assistant/backend/internal/auth"
 	"personal-financial-assistant/backend/internal/categories"
+	"personal-financial-assistant/backend/internal/reports"
 	"personal-financial-assistant/backend/internal/transactions"
 	"personal-financial-assistant/backend/internal/users"
 
@@ -16,6 +17,7 @@ type Deps struct {
 	CategoriesRepo   *categories.Repo
 	JWT              *auth.Manager
 	TransactionsRepo *transactions.Repo
+	ReportsRepo      *reports.Repo
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -40,6 +42,9 @@ func NewRouter(deps Deps) http.Handler {
 			txHandlers := NewTransactionsHandlers(deps.TransactionsRepo)
 			r.Get("/transactions", txHandlers.List)
 			r.Post("/transactions", txHandlers.Create)
+
+			repHandlers := NewReportsHandlers(deps.ReportsRepo)
+			r.Get("/reports/summary", repHandlers.Summary)
 		})
 	})
 

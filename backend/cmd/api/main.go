@@ -11,6 +11,7 @@ import (
 	"personal-financial-assistant/backend/internal/categories"
 	"personal-financial-assistant/backend/internal/db"
 	"personal-financial-assistant/backend/internal/httpapi"
+	"personal-financial-assistant/backend/internal/reports"
 	"personal-financial-assistant/backend/internal/transactions"
 	"personal-financial-assistant/backend/internal/users"
 )
@@ -37,11 +38,13 @@ func main() {
 	usersRepo := users.NewRepo(dbConn.Pool)
 	categoriesRepo := categories.NewRepo(dbConn.Pool)
 	transactionsRepo := transactions.NewRepo(dbConn.Pool)
+	reportsRepo := reports.NewRepo(dbConn.Pool)
 
 	handler := httpapi.NewRouter(httpapi.Deps{
 		UsersRepo:        usersRepo,
 		CategoriesRepo:   categoriesRepo,
 		TransactionsRepo: transactionsRepo,
+		ReportsRepo:      reportsRepo,
 		JWT:              jwtMgr,
 	})
 
