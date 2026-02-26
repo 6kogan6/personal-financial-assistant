@@ -5,15 +5,17 @@ import (
 
 	"personal-financial-assistant/backend/internal/auth"
 	"personal-financial-assistant/backend/internal/categories"
+	"personal-financial-assistant/backend/internal/transactions"
 	"personal-financial-assistant/backend/internal/users"
 
 	"github.com/go-chi/chi/v5"
 )
 
 type Deps struct {
-	UsersRepo      *users.Repo
-	CategoriesRepo *categories.Repo
-	JWT            *auth.Manager
+	UsersRepo        *users.Repo
+	CategoriesRepo   *categories.Repo
+	JWT              *auth.Manager
+	TransactionsRepo *transactions.Repo
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -34,6 +36,10 @@ func NewRouter(deps Deps) http.Handler {
 			catHandlers := NewCategoriesHandlers(deps.CategoriesRepo)
 			r.Get("/categories", catHandlers.List)
 			r.Post("/categories", catHandlers.Create)
+
+			txHandlers := NewTransactionsHandlers(deps.TransactionsRepo)
+			r.Get("/transactions", txHandlers.List)
+			r.Post("/transactions", txHandlers.Create)
 		})
 	})
 

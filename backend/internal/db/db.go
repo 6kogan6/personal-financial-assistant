@@ -77,6 +77,27 @@ CREATE TABLE IF NOT EXISTS categories (
 	CONSTRAINT categories_type_check CHECK (type IN ('expense','income'))
 );
 
+CREATE TABLE IF NOT EXISTS transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  occurred_at DATE NOT NULL,
+  type TEXT NOT NULL,
+  amount_cents BIGINT NOT NULL CHECK (amount_cents >= 0),
+  category_id UUID NOT NULL REFERENCES categories(id),
+  merchant TEXT NOT NULL,
+  note TEXT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT transactions_type_check CHECK (type IN ('expense','income')),
+  CONSTRAINT transactions_source_check CHECK (source IN ('manual','import'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_transactions_user_date
+ON transactions (user_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_transactions_user_category
+ON transactions (user_id, category_id);
+
 -- Уникальность для системных категорий (по name+type)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_categories_system_name_type
 ON categories (name, type)
