@@ -1,42 +1,45 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
 	"personal-financial-assistant/backend/internal/auth"
 )
 
-type ctxKey string
+func AuthMiddleware(jwtManager *auth.Manager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+			if authHeader == "" {
+				writeError(w, http.StatusUnauthorized, "missing authorization header")
+				return
+			}
 
-const userIDKey ctxKey = "user_id"
+			const bearerPrefix = "Bearer "
+			if !strings.HasPrefix(authHeader, bearerPrefix) {
+				writeError(w, http.StatusUnauthorized, "invalid authorization header")
+				return
+			}
 
-func UserIDFromContext(ctx context.Context) (string, bool) {
-	v := ctx.Value(userIDKey)
-	s, ok := v.(string)
-	return s, ok && s != ""
+			tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, bearerPrefix))
+			if tokenString == "" {
+				writeError(w, http.StatusUnauthorized, "empty bearer token")
+				return
+			}
+
+			claims, err := jwtManager.Parse(tokenString)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+
+			ctx := withUserID(r.Context(), claims.UserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
-func RequireAuth(jwtMgr *auth.Manager) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		fn := func(w http.ResponseWriter, r *http.Request) {
-			h := r.Header.Get("Authorization")
-			if h == "" || !strings.HasPrefix(h, "Bearer ") {
-				writeError(w, http.StatusUnauthorized, "нужен токен")
-				return
-			}
-
-			token := strings.TrimPrefix(h, "Bearer ")
-			userID, err := jwtMgr.ParseToken(token)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "неверный токен")
-				return
-			}
-
-			ctx := context.WithValue(r.Context(), userIDKey, userID)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		}
-		return http.HandlerFunc(fn)
-	}
+func RequireAuth(jwtManager *auth.Manager) func(http.Handler) http.Handler {
+	return AuthMiddleware(jwtManager)
 }

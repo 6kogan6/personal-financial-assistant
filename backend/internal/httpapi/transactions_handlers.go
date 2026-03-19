@@ -3,171 +3,221 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
-	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"personal-financial-assistant/backend/internal/transactions"
 )
 
+type TransactionsService interface {
+	Create(ctx context.Context, in transactions.CreateInput) (transactions.Transaction, error)
+	List(ctx context.Context, in transactions.ListInput) ([]transactions.Transaction, int, error)
+	Update(ctx context.Context, in transactions.UpdateInput) (transactions.Transaction, error)
+	Delete(ctx context.Context, userID, transactionID string) error
+}
+
 type TransactionsHandlers struct {
-	repo *transactions.Repo
+	service TransactionsService
 }
 
-func NewTransactionsHandlers(repo *transactions.Repo) *TransactionsHandlers {
-	return &TransactionsHandlers{repo: repo}
+func NewTransactionsHandlers(service TransactionsService) *TransactionsHandlers {
+	return &TransactionsHandlers{service: service}
 }
 
-type transactionDTO struct {
-	ID          string  `json:"id"`
+type createTransactionRequest struct {
 	OccurredAt  string  `json:"occurred_at"`
 	Type        string  `json:"type"`
 	AmountCents int64   `json:"amount_cents"`
 	CategoryID  string  `json:"category_id"`
 	Merchant    string  `json:"merchant"`
-	Note        *string `json:"note,omitempty"`
-	Source      string  `json:"source"`
-	CreatedAt   string  `json:"created_at,omitempty"`
+	Note        *string `json:"note"`
 }
 
-type listTransactionsResp struct {
-	Items []transactionDTO `json:"items"`
-	Total int              `json:"total"`
-}
-
-func (h *TransactionsHandlers) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "нужен токен")
-		return
-	}
-
-	f := transactions.ListFilter{
-		From:       r.URL.Query().Get("from"),
-		To:         r.URL.Query().Get("to"),
-		CategoryID: r.URL.Query().Get("category_id"),
-		Q:          r.URL.Query().Get("q"),
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-
-	items, total, err := h.repo.List(ctx, userID, f)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ошибка сервера")
-		return
-	}
-
-	resp := listTransactionsResp{Items: make([]transactionDTO, 0, len(items)), Total: total}
-	for _, t := range items {
-		dto := transactionDTO{
-			ID:          t.ID,
-			OccurredAt:  t.OccurredAt,
-			Type:        t.Type,
-			AmountCents: t.AmountCents,
-			CategoryID:  t.CategoryID,
-			Merchant:    t.Merchant,
-			Note:        t.Note,
-			Source:      t.Source,
-			CreatedAt:   t.CreatedAt.UTC().Format(time.RFC3339),
-		}
-		resp.Items = append(resp.Items, dto)
-	}
-
-	writeJSON(w, http.StatusOK, resp)
-}
-
-type createTransactionReq struct {
+type updateTransactionRequest struct {
 	OccurredAt  string  `json:"occurred_at"`
 	Type        string  `json:"type"`
-	AmountCents any     `json:"amount_cents"` // чтобы ловить и числа и строки
+	AmountCents int64   `json:"amount_cents"`
 	CategoryID  string  `json:"category_id"`
 	Merchant    string  `json:"merchant"`
 	Note        *string `json:"note"`
 }
 
-func parseAmountCents(v any) (int64, bool) {
-	switch x := v.(type) {
-	case float64:
-		// JSON numbers decode as float64
-		if x < 0 {
-			return 0, false
-		}
-		return int64(x), true
-	case string:
-		n, err := strconv.ParseInt(x, 10, 64)
-		if err != nil || n < 0 {
-			return 0, false
-		}
-		return n, true
-	default:
-		return 0, false
-	}
+type listTransactionsResponse struct {
+	Items  []transactions.Transaction `json:"items"`
+	Total  int                        `json:"total"`
+	Limit  int                        `json:"limit"`
+	Offset int                        `json:"offset"`
 }
 
 func (h *TransactionsHandlers) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "нужен токен")
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	var req createTransactionReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req createTransactionRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "неверный json")
 		return
 	}
 
-	if req.OccurredAt == "" || req.Type == "" || req.CategoryID == "" || req.Merchant == "" {
-		writeError(w, http.StatusBadRequest, "occurred_at, type, category_id, merchant обязательны")
-		return
-	}
-	if req.Type != "expense" && req.Type != "income" {
-		writeError(w, http.StatusBadRequest, "type должен быть expense или income")
-		return
-	}
-	amount, okAmt := parseAmountCents(req.AmountCents)
-	if !okAmt {
-		writeError(w, http.StatusBadRequest, "amount_cents должен быть целым числом >= 0")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-
-	allowed, err := h.repo.CategoryAllowed(ctx, userID, req.CategoryID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ошибка сервера")
-		return
-	}
-	if !allowed {
-		writeError(w, http.StatusNotFound, "категория не найдена")
-		return
-	}
-
-	created, err := h.repo.Create(ctx, transactions.Transaction{
+	item, err := h.service.Create(r.Context(), transactions.CreateInput{
 		UserID:      userID,
 		OccurredAt:  req.OccurredAt,
 		Type:        req.Type,
-		AmountCents: amount,
+		AmountCents: req.AmountCents,
 		CategoryID:  req.CategoryID,
 		Merchant:    req.Merchant,
 		Note:        req.Note,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ошибка сервера")
+		writeTransactionsError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, transactionDTO{
-		ID:          created.ID,
-		OccurredAt:  created.OccurredAt,
-		Type:        created.Type,
-		AmountCents: created.AmountCents,
-		CategoryID:  created.CategoryID,
-		Merchant:    created.Merchant,
-		Note:        created.Note,
-		Source:      created.Source,
-		CreatedAt:   created.CreatedAt.UTC().Format(time.RFC3339),
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (h *TransactionsHandlers) List(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+
+	limit := 50
+	if value := query.Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if value := query.Get("offset"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = parsed
+	}
+
+	items, total, err := h.service.List(r.Context(), transactions.ListInput{
+		UserID:     userID,
+		From:       query.Get("from"),
+		To:         query.Get("to"),
+		CategoryID: query.Get("category_id"),
+		Q:          query.Get("q"),
+		Limit:      limit,
+		Offset:     offset,
 	})
+	if err != nil {
+		writeTransactionsError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, listTransactionsResponse{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
+}
+
+func (h *TransactionsHandlers) Update(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	transactionID := chi.URLParam(r, "transactionID")
+	if transactionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid transaction id")
+		return
+	}
+
+	var req updateTransactionRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "неверный json")
+		return
+	}
+
+	item, err := h.service.Update(r.Context(), transactions.UpdateInput{
+		ID:          transactionID,
+		UserID:      userID,
+		OccurredAt:  req.OccurredAt,
+		Type:        req.Type,
+		AmountCents: req.AmountCents,
+		CategoryID:  req.CategoryID,
+		Merchant:    req.Merchant,
+		Note:        req.Note,
+	})
+	if err != nil {
+		writeTransactionsError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (h *TransactionsHandlers) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	transactionID := chi.URLParam(r, "transactionID")
+	if transactionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid transaction id")
+		return
+	}
+
+	if err := h.service.Delete(r.Context(), userID, transactionID); err != nil {
+		writeTransactionsError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeTransactionsError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, transactions.ErrInvalidUserID),
+		errors.Is(err, transactions.ErrInvalidTransactionID),
+		errors.Is(err, transactions.ErrInvalidCategoryID),
+		errors.Is(err, transactions.ErrInvalidType),
+		errors.Is(err, transactions.ErrInvalidAmount),
+		errors.Is(err, transactions.ErrInvalidMerchant),
+		errors.Is(err, transactions.ErrInvalidOccurredAt),
+		errors.Is(err, transactions.ErrInvalidFromDate),
+		errors.Is(err, transactions.ErrInvalidToDate),
+		errors.Is(err, transactions.ErrCategoryNotAllowed):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+
+	case errors.Is(err, transactions.ErrTransactionNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+
+	default:
+		writeError(w, http.StatusInternalServerError, "ошибка сервера")
+		return
+	}
 }

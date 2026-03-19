@@ -3,21 +3,23 @@ package transactions
 import "time"
 
 type Transaction struct {
-	ID          string
-	UserID      string
-	OccurredAt  string // YYYY-MM-DD
-	Type        string
-	AmountCents int64
-	CategoryID  string
-	Merchant    string
-	Note        *string
-	Source      string
-	CreatedAt   time.Time
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id,omitempty"`
+	OccurredAt  string    `json:"occurred_at"` // YYYY-MM-DD
+	Type        string    `json:"type"`        // income | expense
+	AmountCents int64     `json:"amount_cents"`
+	CategoryID  string    `json:"category_id"`
+	Merchant    string    `json:"merchant"`
+	Note        *string   `json:"note,omitempty"`
+	Source      string    `json:"source"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type ListFilter struct {
-	From       string // YYYY-MM-DD optional
-	To         string // YYYY-MM-DD optional
-	CategoryID string // optional
-	Q          string // optional search in merchant/note
+	From       string
+	To         string
+	CategoryID string
+	Q          string
+	Limit      int
+	Offset     int
 }

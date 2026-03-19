@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,9 +33,6 @@ RETURNING id, email, created_at;
 	var createdAt time.Time
 	err := r.pool.QueryRow(ctx, q, email, passwordHash).Scan(&u.ID, &u.Email, &createdAt)
 	if err != nil {
-		// pgx возвращает ошибки по кодам, но для простоты MVP
-		// проверим текст на "duplicate key".
-		// Позже улучшим через pgconn.PgError.
 		if isUniqueViolation(err) {
 			return User{}, ErrEmailExists
 		}
@@ -50,16 +48,34 @@ func (r *Repo) GetAuthDataByEmail(ctx context.Context, email string) (userID str
 	return userID, passwordHash, err
 }
 
-// Очень простой детектор unique violation для MVP.
-// Если хочешь “правильно”, сделаем через pgconn.PgError.Code == "23505".
+func (r *Repo) GetByID(ctx context.Context, userID string) (User, error) {
+	const q = `
+SELECT id, email, created_at
+FROM users
+WHERE id = $1;
+`
+
+	var u User
+	var createdAt time.Time
+
+	err := r.pool.QueryRow(ctx, q, userID).Scan(&u.ID, &u.Email, &createdAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrUserNotFound
+		}
+		return User{}, err
+	}
+
+	u.CreatedAt = createdAt
+	return u, nil
+}
+
 func isUniqueViolation(err error) bool {
 	s := err.Error()
 	return contains(s, "duplicate key") || contains(s, "unique constraint") || contains(s, "23505")
 }
 
 func contains(s, sub string) bool {
-	// без strings.Contains, чтобы было совсем минимум зависимостей
-	// (можно заменить на strings.Contains — это стандартная библиотека)
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
 			return true

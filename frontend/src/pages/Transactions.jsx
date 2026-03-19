@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { getCategories } from "../api/categories";
-import { createTransaction, getTransactions } from "../api/transactions";
+import {
+  createTransaction,
+  deleteTransactionRequest,
+  getTransactions,
+} from "../api/transactions";
 
 function todayISO() {
   const d = new Date();
@@ -18,6 +22,20 @@ function toIntCents(v) {
   return n;
 }
 
+function formatMoney(cents) {
+  const amount = Number(cents || 0) / 100;
+  return amount.toLocaleString("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatType(type) {
+  return type === "income" ? "Доход" : "Расход";
+}
+
 export default function Transactions() {
   const [loading, setLoading] = useState(false);
   const [loadingCats, setLoadingCats] = useState(false);
@@ -25,7 +43,6 @@ export default function Transactions() {
 
   const [categories, setCategories] = useState([]);
 
-  // filters for list
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [q, setQ] = useState("");
@@ -34,63 +51,80 @@ export default function Transactions() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
 
-  // create form
   const [occurredAt, setOccurredAt] = useState(todayISO());
   const [type, setType] = useState("expense");
-  const [amountCents, setAmountCents] = useState("1299");
-  const [merchant, setMerchant] = useState("Starbucks");
-  const [note, setNote] = useState("латте");
+  const [amountCents, setAmountCents] = useState("");
+  const [merchant, setMerchant] = useState("");
+  const [note, setNote] = useState("");
   const [createCategoryId, setCreateCategoryId] = useState("");
 
   const categoriesByType = useMemo(() => {
     return categories.filter((c) => c.type === type);
   }, [categories, type]);
 
+  const categoryMap = useMemo(() => {
+    const map = new Map();
+    categories.forEach((c) => {
+      map.set(c.id, c);
+    });
+    return map;
+  }, [categories]);
+
+  function buildFilters(next = {}) {
+    const finalFrom = next.from ?? from;
+    const finalTo = next.to ?? to;
+    const finalQ = next.q ?? q;
+    const finalCategoryId = next.categoryId ?? categoryId;
+
+    const params = {};
+    if (finalFrom) params.from = finalFrom;
+    if (finalTo) params.to = finalTo;
+    if (finalQ) params.q = finalQ;
+    if (finalCategoryId) params.category_id = finalCategoryId;
+
+    return params;
+  }
+
+  async function loadTransactions(params = buildFilters()) {
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await getTransactions(params);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+    } catch (e) {
+      setError(e.message || "Не удалось загрузить транзакции");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    // load categories once
     async function loadCats() {
       setLoadingCats(true);
       setError("");
+
       try {
         const data = await getCategories();
         setCategories(data.items || []);
       } catch (e) {
-        setError(e.message || "Ошибка загрузки категорий");
+        setError(e.message || "Не удалось загрузить категории");
       } finally {
         setLoadingCats(false);
       }
     }
+
     loadCats();
   }, []);
 
   useEffect(() => {
-    // when type changes, adjust selected category for create form
     const hasSelected = categoriesByType.some((c) => c.id === createCategoryId);
     if (!hasSelected) {
       setCreateCategoryId(categoriesByType[0]?.id || "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, categoriesByType.length]);
-
-  async function loadTransactions() {
-    setLoading(true);
-    setError("");
-    try {
-      const params = {};
-      if (from) params.from = from;
-      if (to) params.to = to;
-      if (q) params.q = q;
-      if (categoryId) params.category_id = categoryId;
-
-      const data = await getTransactions(params);
-      setItems(data.items || []);
-      setTotal(data.total || 0);
-    } catch (e) {
-      setError(e.message || "Ошибка загрузки транзакций");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   useEffect(() => {
     loadTransactions();
@@ -107,8 +141,7 @@ export default function Transactions() {
     setTo("");
     setQ("");
     setCategoryId("");
-    // после setState сразу перезагрузим "без фильтров"
-    setTimeout(() => loadTransactions(), 0);
+    await loadTransactions({});
   }
 
   async function handleCreate(e) {
@@ -116,24 +149,28 @@ export default function Transactions() {
     setError("");
 
     if (!occurredAt) {
-      setError("Укажи дату (occurred_at)");
+      setError("Укажи дату операции");
       return;
     }
+
     if (!merchant.trim()) {
-      setError("Укажи merchant");
+      setError("Укажи место или источник операции");
       return;
     }
+
     if (!createCategoryId) {
       setError("Выбери категорию");
       return;
     }
+
     const cents = toIntCents(amountCents);
     if (cents === null) {
-      setError("amount_cents должен быть целым числом >= 0");
+      setError("Сумма должна быть целым числом в копейках");
       return;
     }
 
     setLoading(true);
+
     try {
       await createTransaction({
         occurred_at: occurredAt,
@@ -141,105 +178,187 @@ export default function Transactions() {
         amount_cents: cents,
         category_id: createCategoryId,
         merchant: merchant.trim(),
-        note: note ? note : "",
+        note: note ? note.trim() : "",
       });
 
-      // очистим только некоторые поля (как удобнее)
+      setAmountCents("");
       setMerchant("");
       setNote("");
 
-      // обновим список с текущими фильтрами
       await loadTransactions();
     } catch (e) {
-      setError(e.message || "Ошибка создания транзакции");
+      setError(e.message || "Не удалось создать транзакцию");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDelete(id) {
+    setError("");
+    setLoading(true);
+
+    try {
+      await deleteTransactionRequest(id);
+      await loadTransactions();
+    } catch (e) {
+      setError(e.message || "Не удалось удалить транзакцию");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ padding: 24, display: "grid", gap: 16 }}>
-      <h2 style={{ margin: 0 }}>Транзакции</h2>
-
-      {error && (
-        <div style={{ color: "crimson", padding: 12, border: "1px solid crimson", borderRadius: 8 }}>
-          {error}
+    <div className="page">
+      <div className="page-header">
+        <div className="page-title-block">
+          <h1 className="page-title">Транзакции</h1>
+          <div className="page-subtitle">
+            Добавляй операции, фильтруй список и отслеживай движения денег.
+          </div>
         </div>
-      )}
 
-      {/* Filters */}
-      <div style={{ padding: 16, border: "1px solid #444", borderRadius: 12 }}>
-        <div style={{ fontWeight: 600, marginBottom: 10 }}>Фильтры</div>
+        <div className="page-actions">
+          <div className="kpi-inline">
+            <span>Всего записей:</span>
+            <strong>{total}</strong>
+          </div>
 
-        <form onSubmit={handleApplyFilters} style={{ display: "grid", gap: 10 }}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span>from</span>
-              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <button
+            className="btn btn-secondary"
+            onClick={() => loadTransactions()}
+            disabled={loading}
+          >
+            {loading ? "Обновляем..." : "Обновить"}
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="alert">{error}</div>}
+
+      <section className="surface-card section-card">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Фильтры</h2>
+            <div className="section-subtitle">
+              Можно отбирать записи по датам, поисковой фразе и категории.
+            </div>
+          </div>
+        </div>
+
+        <form className="form-grid" onSubmit={handleApplyFilters}>
+          <div className="form-grid columns-4">
+            <label className="field">
+              <span className="field-label">Дата от</span>
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6 }}>
-              <span>to</span>
-              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            <label className="field">
+              <span className="field-label">Дата до</span>
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 220 }}>
-              <span>поиск (q)</span>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Starbucks" />
+            <label className="field">
+              <span className="field-label">Поиск</span>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Например: Starbucks"
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 260 }}>
-              <span>категория</span>
-              <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} disabled={loadingCats}>
-                <option value="">(все)</option>
+            <label className="field">
+              <span className="field-label">Категория</span>
+              <select
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
+                disabled={loadingCats}
+              >
+                <option value="">Все категории</option>
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.type === "expense" ? "расход" : "доход"} · {c.name}
+                    {c.type === "expense" ? "Расход" : "Доход"} · {c.name}
                   </option>
                 ))}
               </select>
             </label>
           </div>
 
-          <div style={{ display: "flex", gap: 10 }}>
-            <button type="submit" disabled={loading}>
+          <div className="form-actions">
+            <button
+              className="btn btn-primary"
+              type="submit"
+              disabled={loading}
+            >
               Применить
             </button>
-            <button type="button" onClick={handleClearFilters} disabled={loading}>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={handleClearFilters}
+              disabled={loading}
+            >
               Сбросить
             </button>
           </div>
         </form>
-      </div>
+      </section>
 
-      {/* Create */}
-      <div style={{ padding: 16, border: "1px solid #444", borderRadius: 12 }}>
-        <div style={{ fontWeight: 600, marginBottom: 10 }}>Добавить транзакцию</div>
+      <section className="surface-card section-card">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Новая транзакция</h2>
+            <div className="section-subtitle">
+              Все суммы вводятся в копейках, чтобы не терять точность.
+            </div>
+          </div>
+        </div>
 
-        <form onSubmit={handleCreate} style={{ display: "grid", gap: 10 }}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span>date</span>
-              <input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
+        <form className="form-grid" onSubmit={handleCreate}>
+          <div className="form-grid columns-3">
+            <label className="field">
+              <span className="field-label">Дата операции</span>
+              <input
+                type="date"
+                value={occurredAt}
+                onChange={(e) => setOccurredAt(e.target.value)}
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6 }}>
-              <span>type</span>
+            <label className="field">
+              <span className="field-label">Тип</span>
               <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="expense">expense</option>
-                <option value="income">income</option>
+                <option value="expense">Расход</option>
+                <option value="income">Доход</option>
               </select>
             </label>
 
-            <label style={{ display: "grid", gap: 6 }}>
-              <span>amount_cents</span>
-              <input value={amountCents} onChange={(e) => setAmountCents(e.target.value)} />
+            <label className="field">
+              <span className="field-label">Сумма (в копейках)</span>
+              <input
+                value={amountCents}
+                onChange={(e) => setAmountCents(e.target.value)}
+                placeholder="Например: 1299"
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 260 }}>
-              <span>category</span>
-              <select value={createCategoryId} onChange={(e) => setCreateCategoryId(e.target.value)} disabled={loadingCats}>
-                {categoriesByType.length === 0 && <option value="">(нет категорий)</option>}
+            <label className="field">
+              <span className="field-label">Категория</span>
+              <select
+                value={createCategoryId}
+                onChange={(e) => setCreateCategoryId(e.target.value)}
+                disabled={loadingCats}
+              >
+                {categoriesByType.length === 0 && (
+                  <option value="">Нет категорий</option>
+                )}
                 {categoriesByType.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -248,62 +367,106 @@ export default function Transactions() {
               </select>
             </label>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 240 }}>
-              <span>merchant</span>
-              <input value={merchant} onChange={(e) => setMerchant(e.target.value)} placeholder="Starbucks" />
+            <label className="field">
+              <span className="field-label">Магазин / источник</span>
+              <input
+                value={merchant}
+                onChange={(e) => setMerchant(e.target.value)}
+                placeholder="Например: Starbucks"
+              />
             </label>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 240 }}>
-              <span>note</span>
-              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="опционально" />
+            <label className="field">
+              <span className="field-label">Комментарий</span>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Необязательно"
+              />
             </label>
           </div>
 
-          <div>
-            <button type="submit" disabled={loading || loadingCats || !createCategoryId}>
-              Добавить
+          <div className="form-actions">
+            <button
+              className="btn btn-primary"
+              type="submit"
+              disabled={loading || loadingCats || !createCategoryId}
+            >
+              Добавить транзакцию
             </button>
           </div>
         </form>
-      </div>
+      </section>
 
-      {/* Table */}
-      <div style={{ padding: 16, border: "1px solid #444", borderRadius: 12 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <div style={{ fontWeight: 600 }}>Список</div>
-          <div style={{ opacity: 0.8 }}>total: {total}</div>
-          <div style={{ flex: 1 }} />
-          <button onClick={loadTransactions} disabled={loading}>
-            Обновить
-          </button>
+      <section className="surface-card section-card">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Список операций</h2>
+            <div className="section-subtitle">
+              Здесь отображаются все транзакции по текущим фильтрам.
+            </div>
+          </div>
         </div>
 
-        <div style={{ marginTop: 12, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div className="table-wrap">
+          <table className="table">
             <thead>
               <tr>
-                <th style={th}>date</th>
-                <th style={th}>type</th>
-                <th style={th}>amount_cents</th>
-                <th style={th}>merchant</th>
-                <th style={th}>note</th>
-                <th style={th}>category_id</th>
+                <th>Дата</th>
+                <th>Тип</th>
+                <th>Сумма</th>
+                <th>Место / источник</th>
+                <th>Комментарий</th>
+                <th>Категория</th>
+                <th>Действие</th>
               </tr>
             </thead>
+
             <tbody>
-              {items.map((t) => (
-                <tr key={t.id}>
-                  <td style={td}>{t.occurred_at}</td>
-                  <td style={td}>{t.type}</td>
-                  <td style={td}>{t.amount_cents}</td>
-                  <td style={td}>{t.merchant}</td>
-                  <td style={td}>{t.note || ""}</td>
-                  <td style={tdMono}>{t.category_id}</td>
-                </tr>
-              ))}
-              {items.length === 0 && (
+              {items.length > 0 ? (
+                items.map((t) => {
+                  const category = categoryMap.get(t.category_id);
+                  const isIncome = t.type === "income";
+
+                  return (
+                    <tr key={t.id}>
+                      <td>{t.occurred_at}</td>
+                      <td>
+                        <span
+                          className={`type-badge ${isIncome ? "income" : "expense"}`}
+                        >
+                          {formatType(t.type)}
+                        </span>
+                      </td>
+                      <td
+                        className={
+                          isIncome ? "amount-positive" : "amount-negative"
+                        }
+                      >
+                        {formatMoney(t.amount_cents)}
+                      </td>
+                      <td>{t.merchant}</td>
+                      <td>{t.note || "—"}</td>
+                      <td>
+                        <div>{category?.name || "Неизвестная категория"}</div>
+                        <div className="mono">{t.category_id}</div>
+                      </td>
+                      <td>
+                        <button
+                          className="btn btn-danger"
+                          type="button"
+                          onClick={() => handleDelete(t.id)}
+                          disabled={loading}
+                        >
+                          Удалить
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
                 <tr>
-                  <td style={td} colSpan={6}>
+                  <td className="table-empty" colSpan={7}>
                     {loading ? "Загрузка..." : "Пока нет транзакций"}
                   </td>
                 </tr>
@@ -312,29 +475,10 @@ export default function Transactions() {
           </table>
         </div>
 
-        <div style={{ marginTop: 10, opacity: 0.8, fontSize: 12 }}>
-          Подсказка: можно фильтровать по <b>q</b>, <b>from/to</b>, <b>category</b>.
+        <div className="helper-text" style={{ marginTop: 12 }}>
+          Подсказка: фильтрация поддерживает даты, строку поиска и категорию.
         </div>
-      </div>
+      </section>
     </div>
   );
 }
-
-const th = {
-  textAlign: "left",
-  padding: "8px 10px",
-  borderBottom: "1px solid #555",
-  fontWeight: 600,
-};
-
-const td = {
-  padding: "8px 10px",
-  borderBottom: "1px solid #333",
-  verticalAlign: "top",
-};
-
-const tdMono = {
-  ...td,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-  fontSize: 12,
-};

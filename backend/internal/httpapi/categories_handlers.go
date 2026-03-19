@@ -38,6 +38,11 @@ func (h *CategoriesHandlers) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
+	if err := h.repo.EnsureSystemDefaults(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "ошибка сервера")
+		return
+	}
+
 	items, err := h.repo.ListForUser(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ошибка сервера")
@@ -84,6 +89,11 @@ func (h *CategoriesHandlers) Create(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
+
+	if err := h.repo.EnsureSystemDefaults(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "ошибка сервера")
+		return
+	}
 
 	c, err := h.repo.CreateUserCategory(ctx, userID, req.Name, req.Type)
 	if err != nil {

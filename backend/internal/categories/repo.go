@@ -21,6 +21,25 @@ func NewRepo(pool *pgxpool.Pool) *Repo {
 	return &Repo{pool: pool}
 }
 
+func (r *Repo) EnsureSystemDefaults(ctx context.Context) error {
+	const q = `
+INSERT INTO categories (user_id, name, type, is_system)
+VALUES
+  (NULL, 'Зарплата',   'income',  true),
+  (NULL, 'Инвестиции', 'income',  true),
+  (NULL, 'Фриланс',    'income',  true),
+  (NULL, 'Подарки',    'income',  true),
+
+  (NULL, 'Продукты',   'expense', true),
+  (NULL, 'Транспорт',  'expense', true),
+  (NULL, 'Игры',       'expense', true),
+  (NULL, 'Дом',        'expense', true)
+ON CONFLICT DO NOTHING;
+`
+	_, err := r.pool.Exec(ctx, q)
+	return err
+}
+
 // ListForUser возвращает системные + пользовательские категории.
 func (r *Repo) ListForUser(ctx context.Context, userID string) ([]Category, error) {
 	const q = `
